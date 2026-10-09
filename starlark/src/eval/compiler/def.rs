@@ -120,6 +120,11 @@ enum DefError {
 /// This is initialized in `post_freeze`.
 struct StmtCompiledCell {
     cell: UnsafeCell<Bc>,
+    /// Set for a `def` restored by pagable deserialization: bytecode is not
+    /// serialized (it holds raw pointers), so it is rebuilt from
+    /// `DefInfo::body_stmts` on first call, with its constants in a heap of
+    /// its own.
+    restored: Option<std::sync::OnceLock<(Bc, crate::values::FrozenHeapRef)>>,
 }
 
 unsafe impl<'v> Trace<'v> for StmtCompiledCell {
@@ -135,6 +140,7 @@ impl StmtCompiledCell {
     fn new() -> StmtCompiledCell {
         StmtCompiledCell {
             cell: UnsafeCell::new(Bc::default()),
+            restored: None,
         }
     }
 
@@ -361,6 +367,7 @@ pub(crate) struct DefInfo {
     pub(crate) parent: FrozenAnyArray<CopySlotFromParent>,
     /// Statement compiled for non-frozen def.
     #[derivative(Debug = "ignore")]
+    #[starlark_pagable(skip)]
     stmt_compiled: Bc,
     // The compiled expression for the body of this definition, to be run
     // after the parameters are evaluated.
@@ -580,24 +587,19 @@ pub(crate) struct DefGen<V> {
 }
 
 fn serialize_optimized_on_freeze_stmt(
-    cell: &StmtCompiledCell,
-    ctx: &mut dyn crate::pagable::StarlarkSerializeContext,
+    _cell: &StmtCompiledCell,
+    _ctx: &mut dyn crate::pagable::StarlarkSerializeContext,
 ) -> crate::Result<()> {
-    // SAFETY: `StmtCompiledCell::set` is only called from `DefGen::post_freeze`,
-    // which runs as part of the freeze pipeline before the frozen def is
-    // exposed to any caller. Pagable serialization is downstream of freeze,
-    // so the cell is stable here.
-    let bc: &Bc = unsafe { &*cell.cell.get() };
-    <Bc as crate::pagable::StarlarkSerialize>::starlark_serialize(bc, ctx)
+    // Bytecode is rebuilt from `body_stmts` (see `StmtCompiledCell::restored`).
+    Ok(())
 }
 
 fn deserialize_optimized_on_freeze_stmt(
-    ctx: &mut dyn crate::pagable::StarlarkDeserializeContext<'_>,
+    _ctx: &mut dyn crate::pagable::StarlarkDeserializeContext<'_>,
 ) -> crate::Result<StmtCompiledCell> {
     Ok(StmtCompiledCell {
-        cell: UnsafeCell::new(
-            <Bc as crate::pagable::StarlarkDeserialize>::starlark_deserialize(ctx)?,
-        ),
+        cell: UnsafeCell::new(Bc::default()),
+        restored: Some(std::sync::OnceLock::new()),
     })
 }
 
@@ -725,10 +727,52 @@ where
 {
     pub(crate) fn bc(&self) -> &Bc {
         if Self::FROZEN {
+            if let Some(restored) = &self.optimized_on_freeze_stmt.restored {
+                return self.restored_bc(restored);
+            }
             self.optimized_on_freeze_stmt.get()
         } else {
             &self.def_info.stmt_compiled
         }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn restored_bc<'a>(
+        &'a self,
+        restored: &'a std::sync::OnceLock<(Bc, crate::values::FrozenHeapRef)>,
+    ) -> &'a Bc {
+        &restored
+            .get_or_init(|| {
+                let module = self
+                    .module
+                    .load_relaxed()
+                    .expect("a restored `def` has its module");
+                let frozen_heap = FrozenHeap::new();
+                let bc = Heap::temp(|heap| {
+                    self.def_info
+                        .body_stmts
+                        .optimize(&mut OptCtx::new(
+                            &mut OptimizeOnFreezeContext {
+                                module: &module,
+                                heap,
+                                frozen_heap: &frozen_heap,
+                            },
+                            self.parameters.len().try_into().unwrap(),
+                        ))
+                        .as_bc(
+                            &self.def_info.stmt_compile_context,
+                            self.def_info.used,
+                            self.parameters.len() as u32,
+                            &frozen_heap,
+                        )
+                });
+                let heap = frozen_heap.into_ref_named(crate::values::FrozenHeapName::Singleton(
+                    crate::singleton_heap_name!(),
+                ));
+                (bc, heap)
+            })
+            .0
     }
 
     fn check_parameter_types(&self, eval: &mut Evaluator<'v, '_, '_>) -> crate::Result<()> {

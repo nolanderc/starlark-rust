@@ -476,8 +476,9 @@ impl<'v, T: StarlarkValue<'v>> crate::pagable::StarlarkDeserialize for FrozenVal
     ) -> crate::Result<Self> {
         let fv = FrozenValue::starlark_deserialize(ctx)?;
         // SAFETY: pagable deserializes this field through the same Rust type
-        // that serialized it.
-        Ok(unsafe { FrozenValueTyped::new_unchecked(fv) })
+        // that serialized it. The value may still be under construction (a
+        // cycle, e.g. a `def` and its module), so it cannot be checked here.
+        Ok(FrozenValueTyped(fv, marker::PhantomData))
     }
 }
 

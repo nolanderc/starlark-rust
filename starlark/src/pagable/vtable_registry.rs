@@ -43,8 +43,25 @@ use crate::values::layout::vtable::AValueVTable;
 /// assigned by sorting all registered type names, so it depends only on the set
 /// of registered types and is therefore stable across runs of the same binary.
 /// See [`VtableRegistry`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DeserTypeId(pub &'static str);
+#[derive(Clone, Copy)]
+pub struct DeserTypeId(pub fn() -> &'static str);
+
+impl fmt::Debug for DeserTypeId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt((self.0)(), f)
+    }
+}
+impl PartialEq for DeserTypeId {
+    fn eq(&self, other: &Self) -> bool {
+        (self.0)() == (other.0)()
+    }
+}
+impl Eq for DeserTypeId {}
+impl std::hash::Hash for DeserTypeId {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (self.0)().hash(state)
+    }
+}
 
 impl pagable::PagableSerialize for DeserTypeId {
     fn pagable_serialize(
@@ -56,7 +73,7 @@ impl pagable::PagableSerialize for DeserTypeId {
             .get(self)
             .copied()
             .ok_or_else(|| {
-                anyhow::anyhow!("Type `{}` was not registered for serialization", self.0)
+                anyhow::anyhow!("Type `{}` was not registered for serialization", (self.0)())
             })?;
         index.pagable_serialize(serializer)
     }
@@ -84,19 +101,19 @@ impl DeserTypeId {
     /// Create a `DeserTypeId` for a type.
     #[inline]
     pub const fn of<T: ?Sized>() -> Self {
-        DeserTypeId(std::any::type_name::<T>())
+        DeserTypeId(std::any::type_name::<T>)
     }
 
     /// Get the underlying type name string.
     #[inline]
-    pub const fn as_str(&self) -> &'static str {
-        self.0
+    pub fn as_str(&self) -> &'static str {
+        (self.0)()
     }
 }
 
 impl Display for DeserTypeId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(self.0, f)
+        Display::fmt((self.0)(), f)
     }
 }
 
@@ -140,7 +157,7 @@ static VTABLE_REGISTRY: LazyLock<VtableRegistry> = LazyLock::new(|| {
     // Sort by type name so each type's index depends only on the set of
     // registered types, making it stable across runs of the same binary.
     let mut id_to_type: Vec<DeserTypeId> = by_type.keys().copied().collect();
-    id_to_type.sort_unstable_by_key(|id| id.0);
+    id_to_type.sort_unstable_by_key(|id| (id.0)());
 
     let type_to_id = id_to_type
         .iter()
@@ -264,7 +281,7 @@ mod tests {
     fn test_type_id_indices_are_sorted_by_name() {
         // Indices are assigned in sorted type-name order; this is what makes
         // them stable across runs of the same binary.
-        let names: Vec<&str> = VTABLE_REGISTRY.id_to_type.iter().map(|id| id.0).collect();
+        let names: Vec<&str> = VTABLE_REGISTRY.id_to_type.iter().map(|id| (id.0)()).collect();
         let mut sorted = names.clone();
         sorted.sort_unstable();
         assert_eq!(
@@ -290,11 +307,11 @@ mod tests {
         // The encoded form is a small varint index, not the full type-name
         // string — that is the whole point of the index encoding.
         assert!(
-            bytes.len() < id.0.len(),
+            bytes.len() < (id.0)().len(),
             "expected index encoding ({} bytes) to be smaller than type name `{}` ({} bytes)",
             bytes.len(),
-            id.0,
-            id.0.len(),
+            (id.0)(),
+            (id.0)().len(),
         );
 
         let mut de = pagable::testing::TestingDeserializer::new(&bytes);
