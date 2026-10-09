@@ -366,6 +366,11 @@ struct FrozenFrozenHeap {
     // TODO(nero): remove Option here, make it required.
     #[allocative(skip)] // We don't really expect it to be big
     name: Option<FrozenHeapName>,
+    /// The id serialized data refers to this heap by: from `name`, or, for a
+    /// deserialized heap (whose name is not serialized), the id it was
+    /// stored with, so values pointing into it can be serialized again.
+    #[allocative(skip)]
+    ref_id: Option<HeapRefId>,
     peak_allocated_bytes: Option<usize>,
 }
 
@@ -430,11 +435,11 @@ impl FrozenFrozenHeap {
     ///   [value_data...]
     /// ```
     fn serialize_inner(&self, serializer: &mut dyn PagableSerializer) -> crate::Result<()> {
-        let heap_name = self
-            .name
-            .as_ref()
-            .expect("The name of the FrozenFrozenHeap should exist in starlark pagable serialize");
-        let heap_id = HeapRefId::from_heap_name(heap_name);
+        let heap_id = self.ref_id.ok_or_else(|| {
+            crate::Error::new_other(anyhow::anyhow!(
+                "a heap without a name cannot be serialized"
+            ))
+        })?;
         // TODO(nero): right now FrozenHeapName hasn't been implemented for Pagable. so just serialize HeapRefId;
         heap_id.pagable_serialize(serializer)?;
 
@@ -557,7 +562,8 @@ impl FrozenFrozenHeap {
         // Register per-value header addresses in shared state.
         state.register_heap(heap_id, value_addrs);
 
-        let heap = Self::deserialize_phase2(arena, refs, &mut ctx)?;
+        let mut heap = Self::deserialize_phase2(arena, refs, &mut ctx)?;
+        heap.ref_id = Some(heap_id);
 
         Ok(heap)
     }
@@ -714,6 +720,7 @@ impl FrozenFrozenHeap {
             arena,
             refs: refs.into_boxed_slice(),
             name: None,
+            ref_id: None,
             peak_allocated_bytes: None,
         })
     }
@@ -858,6 +865,11 @@ impl FrozenHeapRef {
         self.0.as_ref().and_then(|a| a.name.as_ref())
     }
 
+    /// The id serialized data refers to this heap by (see `ref_id`).
+    pub(crate) fn ref_id(&self) -> Option<HeapRefId> {
+        self.0.as_ref().and_then(|a| a.ref_id)
+    }
+
     /// Get the frozen heaps that this frozen heap depends on.
     pub fn refs(&self) -> impl Iterator<Item = &FrozenHeapRef> {
         self.0.as_ref().map(|h| h.refs.iter()).into_iter().flatten()
@@ -975,6 +987,7 @@ impl FrozenHeap {
             FrozenHeapRef(Some(Arc::new(FrozenFrozenHeap {
                 arena,
                 refs: refs.into_iter().collect(),
+                ref_id: name.as_ref().map(HeapRefId::from_heap_name),
                 name,
                 peak_allocated_bytes,
             })))

@@ -100,10 +100,9 @@ impl StarlarkSerState {
     /// pagable arc mechanism defers heap serialization but we need the
     /// value-index maps immediately to resolve pointers.
     pub(crate) fn ensure_offset_maps_registered(&self, heap_ref: &FrozenHeapRef) {
-        let Some(name) = heap_ref.name() else {
+        let Some(heap_id) = heap_ref.ref_id() else {
             return;
         };
-        let heap_id = HeapRefId::from_heap_name(name);
         self.ensure_offset_maps_registered_inner(heap_id, heap_ref.refs_slice(), || {
             heap_ref.build_ptr_to_value_index_map()
         });
