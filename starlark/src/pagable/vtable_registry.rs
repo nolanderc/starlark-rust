@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn test_lookup_nonexistent_type() {
         // Looking up a non-existent type should return an error
-        let result = lookup_vtable(DeserTypeId("this_type_does_not_exist_12345"));
+        let result = lookup_vtable(DeserTypeId(|| "this_type_does_not_exist_12345"));
         assert!(result.is_err());
         match result {
             Err(err) => match err.kind() {

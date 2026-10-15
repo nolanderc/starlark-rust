@@ -227,10 +227,27 @@ pub struct StarlarkDeserializerImpl<'a, 'de> {
     /// [`StarlarkDeserializerImpl::recover_from_pagable`] see the
     /// same state.
     current_heap_deser_state: Arc<Mutex<HeapDeserializationState>>,
+    /// The thread's current heap before this one, restored on drop.
+    prev_current: Option<CurrentHeapDeserState>,
 }
 
-/// "Currently-deserializing heap" handle stashed in the deserialize
-/// session context so nested deserializers entering via
+thread_local! {
+    /// The heap this thread is deserializing. Not in the session context:
+    /// a session may deserialize heaps on several threads at once, and a
+    /// heap deserialized inside another must not leave its state behind.
+    static CURRENT_HEAP: std::cell::RefCell<Option<CurrentHeapDeserState>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+impl Drop for StarlarkDeserializerImpl<'_, '_> {
+    fn drop(&mut self) {
+        let prev = self.prev_current.take();
+        CURRENT_HEAP.with_borrow_mut(|c| *c = prev);
+    }
+}
+
+/// "Currently-deserializing heap" handle, kept per thread so nested
+/// deserializers entering via
 /// [`StarlarkDeserializerImpl::recover_from_pagable`] share the same
 /// per-heap init state.
 #[derive(Clone, Dupe)]
@@ -265,13 +282,16 @@ impl<'a, 'de> StarlarkDeserializerImpl<'a, 'de> {
         state: Arc<StarlarkDeserState>,
         current_heap_deser_state: Arc<Mutex<HeapDeserializationState>>,
     ) -> Self {
-        pagable.session_context().set(CurrentHeapDeserState {
-            deser_state: current_heap_deser_state.dupe(),
+        let prev_current = CURRENT_HEAP.with_borrow_mut(|c| {
+            c.replace(CurrentHeapDeserState {
+                deser_state: current_heap_deser_state.dupe(),
+            })
         });
         Self {
             pagable,
             state,
             current_heap_deser_state,
+            prev_current,
         }
     }
 
@@ -284,15 +304,12 @@ impl<'a, 'de> StarlarkDeserializerImpl<'a, 'de> {
             .get_or_insert_with(|| Arc::new(StarlarkDeserState::new()))
     }
 
-    /// Read the currently-deserializing heap context from the session
-    /// context. Returns `None` if no outer heap deserialization has
-    /// set it up.
+    /// The heap this thread is deserializing. Returns `None` if no outer
+    /// heap deserialization has set it up.
     pub(crate) fn current_heap_deser_state_from_context(
-        deserializer: &mut dyn PagableDeserializer<'_>,
+        _deserializer: &mut dyn PagableDeserializer<'_>,
     ) -> Option<CurrentHeapDeserState> {
-        deserializer
-            .session_context()
-            .get::<CurrentHeapDeserState>()
+        CURRENT_HEAP.with_borrow(|c| c.clone())
     }
 
     /// Lock and return the current heap's deserialization state. The guard
