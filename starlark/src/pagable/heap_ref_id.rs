@@ -63,6 +63,10 @@ use crate::values::FrozenHeapName;
 pub struct HeapRefId(u64);
 
 impl HeapRefId {
+    pub(crate) fn as_u64(self) -> u64 {
+        self.0
+    }
+
     pub(crate) fn from_heap_name(name: &FrozenHeapName) -> Self {
         let mut hasher = Blake3StrongHasher::new();
         name.strong_hash(&mut hasher);

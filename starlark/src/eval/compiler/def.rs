@@ -367,8 +367,11 @@ pub(crate) struct DefInfo {
     pub(crate) parent: FrozenAnyArray<CopySlotFromParent>,
     /// Statement compiled for non-frozen def.
     #[derivative(Debug = "ignore")]
-    #[starlark_pagable(skip)]
-    stmt_compiled: Bc,
+    #[starlark_pagable(
+        serialize_with = "serialize_def_bc",
+        deserialize_with = "deserialize_def_bc"
+    )]
+    stmt_compiled: DefBc,
     // The compiled expression for the body of this definition, to be run
     // after the parameters are evaluated.
     #[derivative(Debug = "ignore")]
@@ -398,7 +401,7 @@ impl DefInfo {
             docstring: None,
             used: local_names,
             parent,
-            stmt_compiled: Bc::default(),
+            stmt_compiled: DefBc::Compiled(Bc::default()),
             body_stmts: StmtsCompiled::empty(),
             stmt_compile_context: StmtCompileContext::default(),
             inline_def_body: None,
@@ -520,12 +523,12 @@ impl Compiler<'_, '_, '_, '_> {
                 .eval
                 .frozen_heap()
                 .alloc_any_array_value(&scope_names.parent),
-            stmt_compiled: body.as_bc(
+            stmt_compiled: DefBc::Compiled(body.as_bc(
                 &self.compile_context(return_type.is_some()),
                 used,
                 param_count,
                 self.eval.module_env.frozen_heap(),
-            ),
+            )),
             body_stmts: body,
             inline_def_body,
             stmt_compile_context: self.compile_context(return_type.is_some()),
@@ -584,6 +587,28 @@ pub(crate) struct DefGen<V> {
         deserialize_with = "deserialize_optimized_on_freeze_stmt"
     )]
     optimized_on_freeze_stmt: StmtCompiledCell,
+}
+
+/// The bytecode of a `def` not optimized on freeze: compiled, or, for a
+/// `DefInfo` restored by pagable deserialization (bytecode holds raw
+/// pointers and is not serialized), rebuilt from `body_stmts` when first
+/// needed, its constants in a heap of its own.
+enum DefBc {
+    Compiled(Bc),
+    Restored(std::sync::OnceLock<(Bc, crate::values::FrozenHeapRef)>),
+}
+
+fn serialize_def_bc(
+    _bc: &DefBc,
+    _ctx: &mut dyn crate::pagable::StarlarkSerializeContext,
+) -> crate::Result<()> {
+    Ok(())
+}
+
+fn deserialize_def_bc(
+    _ctx: &mut dyn crate::pagable::StarlarkDeserializeContext<'_>,
+) -> crate::Result<DefBc> {
+    Ok(DefBc::Restored(std::sync::OnceLock::new()))
 }
 
 fn serialize_optimized_on_freeze_stmt(
@@ -732,8 +757,36 @@ where
             }
             self.optimized_on_freeze_stmt.get()
         } else {
-            &self.def_info.stmt_compiled
+            match &self.def_info.stmt_compiled {
+                DefBc::Compiled(bc) => bc,
+                DefBc::Restored(restored) => self.restored_unfrozen_bc(restored),
+            }
         }
+    }
+
+    /// The bytecode of a `def` made by running a restored function (see
+    /// [`DefBc::Restored`]).
+    #[cold]
+    #[inline(never)]
+    fn restored_unfrozen_bc<'a>(
+        &'a self,
+        restored: &'a std::sync::OnceLock<(Bc, crate::values::FrozenHeapRef)>,
+    ) -> &'a Bc {
+        &restored
+            .get_or_init(|| {
+                let frozen_heap = FrozenHeap::new();
+                let bc = self.def_info.body_stmts.as_bc(
+                    &self.def_info.stmt_compile_context,
+                    self.def_info.used,
+                    self.parameters.len() as u32,
+                    &frozen_heap,
+                );
+                let heap = frozen_heap.into_ref_named(crate::values::FrozenHeapName::Singleton(
+                    crate::singleton_heap_name!(),
+                ));
+                (bc, heap)
+            })
+            .0
     }
 
     #[cold]

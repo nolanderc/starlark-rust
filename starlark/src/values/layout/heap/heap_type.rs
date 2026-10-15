@@ -875,6 +875,19 @@ impl FrozenHeapRef {
         self.0.as_ref().and_then(|a| a.ref_id)
     }
 
+    /// The id pagable serialization refers to this heap by: a hash of its
+    /// name, kept by a deserialized heap. `None` for an unnamed heap.
+    pub fn serialized_id(&self) -> Option<u64> {
+        self.ref_id().map(|id| id.as_u64())
+    }
+
+    /// The heap a pagable serializer is handed as an arc, if `arc` is one.
+    pub fn from_pagable_arc(arc: &dyn pagable::arc_erase::ArcEraseDyn) -> Option<FrozenHeapRef> {
+        arc.as_arc_any()
+            .downcast_ref::<Arc<FrozenFrozenHeap>>()
+            .map(|heap| FrozenHeapRef(Some(Arc::clone(heap))))
+    }
+
     /// Get the frozen heaps that this frozen heap depends on.
     pub fn refs(&self) -> impl Iterator<Item = &FrozenHeapRef> {
         self.0.as_ref().map(|h| h.refs.iter()).into_iter().flatten()
