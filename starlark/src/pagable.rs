@@ -77,6 +77,10 @@ pub use starlark_pagable_impls::SmallMapKeyDeserialize;
 pub use starlark_serialize::StarlarkSerialize;
 pub use starlark_serialize::StarlarkSerializeContext;
 pub use starlark_serialize_context::StarlarkSerializerImpl;
+pub use starlark_serialize_context::recording_pointed_heaps;
+pub use starlark_serialize_context::HeapRefsOverride;
+pub use starlark_serialize_context::overriding_heap_refs;
+pub use starlark_serialize_context::serialized_heaps;
 
 /// Sealed marker emitted by `#[starlark_pagable_typetag]` on a trait. The
 /// impl form requires it, pairing the two structurally.

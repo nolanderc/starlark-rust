@@ -450,8 +450,12 @@ impl FrozenFrozenHeap {
                 .sum()
         }
 
-        self.refs.len().pagable_serialize(serializer)?;
-        for heap_ref in self.refs.iter() {
+        let refs = crate::pagable::starlark_serialize_context::heap_refs_to_write(
+            heap_id.as_u64(),
+            &self.refs,
+        );
+        refs.len().pagable_serialize(serializer)?;
+        for heap_ref in refs.iter() {
             heap_ref.pagable_serialize(serializer)?;
         }
 

@@ -45,6 +45,9 @@ pub(crate) struct StarlarkSerState {
     /// Heaps whose value-index maps have already been folded into
     /// `ptr_to_location`. Used to avoid double-registration.
     registered_heaps: DashSet<HeapRefId>,
+    /// The heaps registered from a `FrozenHeapRef`, by id (see
+    /// [`serialized_heaps`]).
+    heaps: DashMap<u64, FrozenHeapRef>,
 }
 
 impl StarlarkSerState {
@@ -52,6 +55,7 @@ impl StarlarkSerState {
         Self {
             ptr_to_location: DashMap::new(),
             registered_heaps: DashSet::new(),
+            heaps: DashMap::new(),
         }
     }
 
@@ -103,6 +107,9 @@ impl StarlarkSerState {
         let Some(heap_id) = heap_ref.ref_id() else {
             return;
         };
+        if !self.has_heap(heap_id) {
+            self.heaps.insert(heap_id.as_u64(), heap_ref.clone());
+        }
         self.ensure_offset_maps_registered_inner(heap_id, heap_ref.refs_slice(), || {
             heap_ref.build_ptr_to_value_index_map()
         });
@@ -178,6 +185,11 @@ impl StarlarkSerializeContext for StarlarkSerializerImpl<'_> {
                         )
                     });
 
+                POINTED_HEAPS.with_borrow_mut(|pointed| {
+                    if let Some(pointed) = pointed {
+                        pointed.insert(heap_id.as_u64());
+                    }
+                });
                 let serialized = SerializedFrozenValue::HeapPtr {
                     heap_id,
                     value_index,
@@ -196,5 +208,68 @@ impl StarlarkSerializeContext for StarlarkSerializerImpl<'_> {
             }
         }
         Ok(())
+    }
+}
+
+thread_local! {
+    static POINTED_HEAPS: std::cell::RefCell<Option<std::collections::HashSet<u64>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` (a serialization) and return, with its result, the ids (see
+/// [`crate::values::FrozenHeapRef::serialized_id`]) of the heaps the values
+/// it serialized point into: the heaps deserializing them needs, as
+/// opposed to heaps only referenced (kept alive).
+pub fn recording_pointed_heaps<R>(f: impl FnOnce() -> R) -> (R, std::collections::HashSet<u64>) {
+    let previous = POINTED_HEAPS.replace(Some(Default::default()));
+    let result = f();
+    let pointed = POINTED_HEAPS.replace(previous).unwrap_or_default();
+    (result, pointed)
+}
+
+/// The heaps with ids `ids` among those a serialization in `session` met
+/// (the heaps the values it serialized may point into).
+pub fn serialized_heaps(
+    session: &pagable::SessionContext,
+    ids: impl IntoIterator<Item = u64>,
+) -> Vec<FrozenHeapRef> {
+    let Some(state) = session.get::<Arc<StarlarkSerState>>() else {
+        return Vec::new();
+    };
+    ids.into_iter()
+        .filter_map(|id| state.heaps.get(&id).map(|h| h.clone()))
+        .collect()
+}
+
+/// Chooses the heaps a heap being serialized refers to (keeps alive): given
+/// its id and its references, the ones to write.
+pub type HeapRefsOverride = dyn Fn(u64, &[FrozenHeapRef]) -> Vec<FrozenHeapRef>;
+
+thread_local! {
+    static HEAP_REFS_OVERRIDE: std::cell::RefCell<Option<std::rc::Rc<HeapRefsOverride>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` (a serialization) with `choose` deciding which references each
+/// heap it serializes writes. A deserialized heap keeps alive only what it
+/// was written with, so they must include every heap its values point
+/// into (see [`recording_pointed_heaps`]).
+pub fn overriding_heap_refs<R>(choose: std::rc::Rc<HeapRefsOverride>, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<std::rc::Rc<HeapRefsOverride>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            HEAP_REFS_OVERRIDE.set(self.0.take());
+        }
+    }
+    let _restore = Restore(HEAP_REFS_OVERRIDE.replace(Some(choose)));
+    f()
+}
+
+/// The references to write for heap `id` with references `refs`.
+pub(crate) fn heap_refs_to_write(id: u64, refs: &[FrozenHeapRef]) -> Vec<FrozenHeapRef> {
+    let choose = HEAP_REFS_OVERRIDE.with_borrow(|choose| choose.clone());
+    match choose {
+        Some(choose) => choose(id, refs),
+        None => refs.to_vec(),
     }
 }
