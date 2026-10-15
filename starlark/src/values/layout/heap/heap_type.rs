@@ -704,7 +704,12 @@ impl FrozenFrozenHeap {
                 // SAFETY: abs_pos is computed from the offset table written during
                 // serialization — it points to the start of this value's data.
                 unsafe { ctx.pagable().seek(target.abs_pos) };
-                (target.vtable.starlark_deserialize)(target.raw_ptr, ctx)?;
+                if let Err(e) = (target.vtable.starlark_deserialize)(target.raw_ptr, ctx) {
+                    // Values not deserialized still have the sentinel vtable,
+                    // which panics when dropped: leak the partial heap.
+                    std::mem::forget(arena);
+                    return Err(e);
+                }
                 // Replace the sentinel vtable with the real one now that
                 // deserialization is complete. The sentinel must stay in place
                 // until this point so that any access to the value before it
