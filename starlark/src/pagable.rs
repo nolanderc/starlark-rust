@@ -68,6 +68,9 @@ pub(crate) mod starlark_serialize_context;
 mod starlark_pagable_impls;
 
 // Re-export public types
+pub use crate::values::layout::heap::heap_type::deserialize_heap;
+pub use crate::values::layout::heap::heap_type::serialize_values_as_heap;
+pub use crate::values::layout::heap::heap_type::value_needs_drop;
 pub use starlark_deserialize::StarlarkDeserialize;
 pub use starlark_deserialize::StarlarkDeserializeContext;
 pub use starlark_deserialize::starlark_deserialize_field;
@@ -79,10 +82,13 @@ pub use starlark_pagable_impls::SmallMapKeyDeserialize;
 pub use starlark_serialize::StarlarkSerialize;
 pub use starlark_serialize::StarlarkSerializeContext;
 pub use starlark_serialize_context::HeapRefsOverride;
+pub use starlark_serialize_context::ImportHook;
 pub use starlark_serialize_context::StarlarkSerializerImpl;
 pub use starlark_serialize_context::overriding_heap_refs;
 pub use starlark_serialize_context::recording_pointed_heaps;
+pub use starlark_serialize_context::serialize_value_payload;
 pub use starlark_serialize_context::serialized_heaps;
+pub use starlark_serialize_context::with_import_hook;
 
 /// Sealed marker emitted by `#[starlark_pagable_typetag]` on a trait. The
 /// impl form requires it, pairing the two structurally.

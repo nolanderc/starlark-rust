@@ -134,6 +134,9 @@ pub struct AValueVTable {
     // `Drop`
     drop_in_place: fn(StarlarkValueRawPtr),
 
+    /// Whether values of this type live in a heap's drop bump.
+    pub(crate) needs_drop: bool,
+
     // `AValue`
     pub(crate) is_str: bool,
     memory_size: fn(StarlarkValueRawPtr) -> ValueAllocSize,
@@ -160,6 +163,12 @@ struct GetTypeId<'v, T: StarlarkValue<'v>>(PhantomData<&'v T>);
 impl<'v, T: StarlarkValue<'v>> GetTypeId<'v, T> {
     const TYPE_ID: ConstTypeId = ConstTypeId::of::<<T as ProvidesStaticType>::StaticType>();
     const STARLARK_TYPE_ID: StarlarkTypeId = StarlarkTypeId::of::<T>();
+}
+
+struct GetNeedsDrop<T>(PhantomData<T>);
+
+impl<T> GetNeedsDrop<T> {
+    const NEEDS_DROP: bool = mem::needs_drop::<T>();
 }
 
 struct GetAllocativeKey<'v, T: StarlarkValue<'v>>(PhantomData<&'v T>);
@@ -208,6 +217,7 @@ impl AValueVTable {
 
         &AValueVTable {
             drop_in_place: |_| {},
+            needs_drop: false,
             is_str: false,
             memory_size: |_| panic!("{}", PANIC_MSG),
             static_type_of_value: UNINIT_TYPE_ID,
@@ -238,6 +248,7 @@ impl AValueVTable {
 
         &AValueVTable {
             drop_in_place: |_| {},
+            needs_drop: false,
 
             is_str: false,
             memory_size: |p| unsafe { (*p.value_ptr::<BlackHole>()).0 },
@@ -282,6 +293,7 @@ impl AValueVTable {
             drop_in_place: |p| unsafe {
                 ptr::drop_in_place(p.value_ptr::<T::StarlarkValue>());
             },
+            needs_drop: GetNeedsDrop::<T::StarlarkValue>::NEEDS_DROP,
             is_str: T::IS_STR,
             memory_size: |p| unsafe {
                 let p = &*p.value_ptr::<T::StarlarkValue>();
