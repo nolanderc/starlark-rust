@@ -34,6 +34,7 @@ use crate::pagable::heap_ref_id::HeapRefId;
 use crate::pagable::serialized_frozen_value::SerializedFrozenValue;
 use crate::pagable::starlark_deserialize::StarlarkDeserializeContext;
 use crate::pagable::static_value::get_frozen_value_by_static_id;
+use crate::values::FrozenHeapRef;
 use crate::values::FrozenValue;
 use crate::values::layout::heap::repr::AValueHeader;
 use crate::values::layout::pointer::PointerTags;
@@ -209,6 +210,32 @@ impl StarlarkDeserState {
     /// Register a heap's per-value header address table.
     pub(crate) fn register_heap(&self, heap_id: HeapRefId, value_addrs: Vec<usize>) {
         self.heap_value_addrs.insert(heap_id, value_addrs);
+    }
+}
+
+/// Make the values of `heap`, and of the heaps it references, resolvable
+/// by deserializations in `session` as if they had been deserialized
+/// there: for heaps rebuilt rather than stored, which values stored
+/// elsewhere point into. Sound only if the heap's layout (its values, in
+/// serialization order) is the one those values were serialized against
+/// (a deterministic heap with the same id), and while the heap lives: the
+/// session keeps raw addresses. A heap whose id was registered before is
+/// registered again (values deserialized against the earlier one keep it
+/// alive).
+pub fn register_live_heap(session: &pagable::SessionContext, heap: &FrozenHeapRef) {
+    let state: Arc<StarlarkDeserState> =
+        session.get_or_insert_with(|| Arc::new(StarlarkDeserState::new()));
+    let mut stack = vec![heap.dupe()];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(heap) = stack.pop() {
+        let Some(id) = heap.ref_id() else {
+            continue;
+        };
+        if !seen.insert(id) {
+            continue;
+        }
+        state.register_heap(id, heap.value_header_addrs());
+        stack.extend(heap.refs().map(|r| r.dupe()));
     }
 }
 

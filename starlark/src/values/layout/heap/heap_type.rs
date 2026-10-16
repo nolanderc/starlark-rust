@@ -947,6 +947,14 @@ impl FrozenHeapRef {
         }
     }
 
+    /// The header address of every value, by `value_index`.
+    pub(crate) fn value_header_addrs(&self) -> Vec<usize> {
+        match &self.0 {
+            Some(inner) => inner.arena.value_header_addrs(),
+            None => Vec::new(),
+        }
+    }
+
     /// Collect live value headers from the non-drop bump in allocation order.
     #[cfg(all(test, feature = "pagable"))]
     pub(crate) fn collect_undrop_headers_ordered(&self) -> Vec<&AValueHeader> {

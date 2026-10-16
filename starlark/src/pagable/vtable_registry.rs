@@ -281,7 +281,11 @@ mod tests {
     fn test_type_id_indices_are_sorted_by_name() {
         // Indices are assigned in sorted type-name order; this is what makes
         // them stable across runs of the same binary.
-        let names: Vec<&str> = VTABLE_REGISTRY.id_to_type.iter().map(|id| (id.0)()).collect();
+        let names: Vec<&str> = VTABLE_REGISTRY
+            .id_to_type
+            .iter()
+            .map(|id| (id.0)())
+            .collect();
         let mut sorted = names.clone();
         sorted.sort_unstable();
         assert_eq!(

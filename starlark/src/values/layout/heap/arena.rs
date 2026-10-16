@@ -504,6 +504,23 @@ impl<A: ArenaAllocator> Arena<A> {
         map
     }
 
+    /// The header address of every value, by `value_index` (the order of
+    /// [`Arena::build_ptr_to_value_index_map`]).
+    pub(crate) fn value_header_addrs(&self) -> Vec<usize> {
+        let mut addrs = Vec::new();
+        Self::for_each_bump_ordered(&self.drop, |value| {
+            if let Some(header) = value.unpack_header() {
+                addrs.push(header as *const AValueHeader as usize);
+            }
+        });
+        Self::for_each_bump_ordered(&self.non_drop, |value| {
+            if let Some(header) = value.unpack_header() {
+                addrs.push(header as *const AValueHeader as usize);
+            }
+        });
+        addrs
+    }
+
     pub(crate) unsafe fn visit_arena<'v>(
         &'v self,
         heap_kind: HeapKind,
