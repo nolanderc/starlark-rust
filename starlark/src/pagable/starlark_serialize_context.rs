@@ -199,19 +199,11 @@ impl StarlarkSerializeContext for StarlarkSerializerImpl<'_> {
                         )
                     });
 
-                let hook = IMPORT_HOOK.with_borrow(|hook| hook.clone());
-                let redirected = hook.and_then(|hook| hook.redirect(fv, raw_ptr, heap_id.as_u64()));
-                let (heap_id, value_index) = match redirected {
-                    Some((heap, index)) => (HeapRefId::from_u64(heap), index),
-                    None => {
-                        POINTED_HEAPS.with_borrow_mut(|pointed| {
-                            if let Some(pointed) = pointed {
-                                pointed.insert(heap_id.as_u64());
-                            }
-                        });
-                        (heap_id, value_index)
+                POINTED_HEAPS.with_borrow_mut(|pointed| {
+                    if let Some(pointed) = pointed {
+                        pointed.insert(heap_id.as_u64());
                     }
-                };
+                });
                 let serialized = SerializedFrozenValue::HeapPtr {
                     heap_id,
                     value_index,
@@ -294,45 +286,4 @@ pub(crate) fn heap_refs_to_write(id: u64, refs: &[FrozenHeapRef]) -> Vec<FrozenH
         Some(choose) => choose(id, refs),
         None => refs.to_vec(),
     }
-}
-
-/// Redirects pointers while values are serialized (see [`with_import_hook`]).
-pub trait ImportHook {
-    /// For a pointer to `value` (whose payload is at address `raw`) in the
-    /// heap with id `heap_id`: `Some((heap, index))` to write a pointer to
-    /// the value with `index` in the heap with id `heap` instead (a copy of
-    /// it the caller writes there), or `None` to write it as it is.
-    fn redirect(&self, value: FrozenValue, raw: usize, heap_id: u64) -> Option<(u64, u32)>;
-}
-
-thread_local! {
-    static IMPORT_HOOK: std::cell::RefCell<Option<std::rc::Rc<dyn ImportHook>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Run `f` (serializations) with pointers redirected by `hook`: lets a
-/// caller copy values of other heaps into a heap it writes
-/// ([`crate::pagable::serialize_values_as_heap`]) and point at the copies,
-/// so that reading them back does not need those heaps.
-pub fn with_import_hook<R>(hook: std::rc::Rc<dyn ImportHook>, f: impl FnOnce() -> R) -> R {
-    struct Restore(Option<std::rc::Rc<dyn ImportHook>>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            IMPORT_HOOK.set(self.0.take());
-        }
-    }
-    let _restore = Restore(IMPORT_HOOK.replace(Some(hook)));
-    f()
-}
-
-/// Serialize the payload of `value` (not inline, not static) as its heap
-/// would, discarding nothing: for finding what it points at (through
-/// [`with_import_hook`] or [`recording_pointed_heaps`]).
-pub fn serialize_value_payload(
-    serializer: &mut dyn PagableSerializer,
-    value: FrozenValue,
-) -> crate::Result<()> {
-    let state = StarlarkSerializerImpl::get_or_create_state(serializer);
-    let mut ctx = StarlarkSerializerImpl::new(serializer, state);
-    value.to_value().get_ref().starlark_serialize(&mut ctx)
 }
