@@ -44,4 +44,14 @@ pub trait StarlarkSerializeContext {
 
     /// Serialize a `FrozenValue`
     fn serialize_frozen_value(&mut self, fv: FrozenValue) -> crate::Result<()>;
+
+    /// Where `fv` lives, as serialization refers to it: the id of its heap
+    /// (see [`crate::values::FrozenHeapRef::serialized_id`]) and its value
+    /// index there, or `None` for a static or inline value. Lets a value
+    /// keep a reference to another without pointing at it (to be resolved
+    /// later with [`crate::pagable::session_frozen_value`]).
+    fn frozen_value_location(&mut self, fv: FrozenValue) -> Option<(u64, u32)> {
+        let _ = fv;
+        None
+    }
 }

@@ -157,6 +157,20 @@ impl StarlarkSerializeContext for StarlarkSerializerImpl<'_> {
         self.pagable
     }
 
+    fn frozen_value_location(&mut self, fv: FrozenValue) -> Option<(u64, u32)> {
+        match fv.ptr_value().tags() {
+            PointerTags::OtherFrozen | PointerTags::StrFrozen => {
+                if get_static_value_id(fv).is_some() {
+                    return None;
+                }
+                let raw_ptr = fv.to_value().get_ref().value.ptr as usize;
+                let location = self.state.ptr_to_location.get(&raw_ptr).map(|loc| *loc)?;
+                Some((location.0.as_u64(), location.1))
+            }
+            _ => None,
+        }
+    }
+
     fn serialize_frozen_value(&mut self, fv: FrozenValue) -> crate::Result<()> {
         match fv.ptr_value().tags() {
             PointerTags::OtherFrozen | PointerTags::StrFrozen => {

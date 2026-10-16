@@ -239,6 +239,28 @@ pub fn register_live_heap(session: &pagable::SessionContext, heap: &FrozenHeapRe
     }
 }
 
+/// The value with index `index` in the heap with id `heap_id` (see
+/// [`crate::values::FrozenHeapRef::serialized_id`]) as deserializations in
+/// `session` resolve it: the heap deserialized (or registered with
+/// [`register_live_heap`]) last with that id. `None` if no such heap or
+/// value. The caller must hold that heap alive for as long as it uses the
+/// value.
+pub fn session_frozen_value(
+    session: &pagable::SessionContext,
+    heap_id: u64,
+    index: u32,
+) -> Option<FrozenValue> {
+    let state: Arc<StarlarkDeserState> = session.get()?;
+    let addr = *state
+        .heap_value_addrs
+        .get(&HeapRefId::from_u64(heap_id))?
+        .get(index as usize)?;
+    // SAFETY: the address is a value header of a registered heap, which the
+    // caller keeps alive.
+    let header: &'static AValueHeader = unsafe { &*(addr as *const AValueHeader) };
+    Some(FrozenValue::new_ptr_query_is_str(header))
+}
+
 /// Concrete implementation of StarlarkDeserializeContext.
 ///
 /// Wraps a `PagableDeserializer` and a shared `StarlarkDeserState` to

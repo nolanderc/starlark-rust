@@ -67,6 +67,10 @@ impl HeapRefId {
         self.0
     }
 
+    pub(crate) fn from_u64(id: u64) -> Self {
+        Self(id)
+    }
+
     pub(crate) fn from_heap_name(name: &FrozenHeapName) -> Self {
         let mut hasher = Blake3StrongHasher::new();
         name.strong_hash(&mut hasher);
